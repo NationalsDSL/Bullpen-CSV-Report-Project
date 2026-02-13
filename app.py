@@ -12,6 +12,14 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+try:
+    import plotly.graph_objects as go
+
+    HAS_PLOTLY = True
+except ModuleNotFoundError:
+    go = None
+    HAS_PLOTLY = False
+
 st.set_page_config(page_title="Pitching Report Generator", layout="wide")
 
 st.title("Pitching Report Generator")
@@ -408,6 +416,77 @@ if folder_path.strip() != "":
     fig_zone.tight_layout()
     fig_zone.savefig(zone_path, dpi=150)
 
+    if HAS_PLOTLY:
+        # Interactive strike zone plot (web)
+        zone_plot_df = zone_df.copy()
+        if "PitchNo" in df_filtered.columns:
+            zone_plot_df = zone_plot_df.join(df_filtered[["PitchNo", "RelSpeed", "SpinRate"]])
+            zone_plot_df["PitchNo"] = zone_plot_df["PitchNo"].fillna("").astype(str)
+        else:
+            zone_plot_df = zone_plot_df.join(df_filtered[["RelSpeed", "SpinRate"]])
+            zone_plot_df["PitchNo"] = ""
+        zone_plot_df["RelSpeedDisplay"] = zone_plot_df["RelSpeed"].apply(
+            lambda v: f"{v:.1f}" if pd.notna(v) else "N/A"
+        )
+        zone_plot_df["SpinRateDisplay"] = zone_plot_df["SpinRate"].apply(
+            lambda v: f"{v:.0f}" if pd.notna(v) else "N/A"
+        )
+
+        fig_zone_interactive = go.Figure()
+        for pitch_type in zone_pitch_types:
+            pitch_group = zone_plot_df[zone_plot_df["TaggedPitchType"] == pitch_type]
+            if pitch_group.empty:
+                continue
+            fig_zone_interactive.add_trace(
+                go.Scatter(
+                    x=pitch_group["PlateLocSide"],
+                    y=pitch_group["PlateLocHeight"],
+                    mode="markers",
+                    name=pitch_type,
+                    marker=dict(size=9, color=pitch_color_map.get(pitch_type, "#7f7f7f")),
+                    customdata=pitch_group[["PitchNo", "RelSpeedDisplay", "SpinRateDisplay"]],
+                    hovertemplate=(
+                        "Pitch Type: %{fullData.name}<br>"
+                        "Pitch No: %{customdata[0]}<br>"
+                        "RelSpeed: %{customdata[1]}<br>"
+                        "SpinRate: %{customdata[2]}<br>"
+                        "Horizontal: %{x:.2f}<br>"
+                        "Vertical: %{y:.2f}<extra></extra>"
+                    ),
+                )
+            )
+
+        # Strike zone and axis reference lines
+        zone_shapes = [
+            dict(type="line", x0=-0.83, y0=1.3, x1=0.83, y1=1.3, line=dict(color="black", width=2)),
+            dict(type="line", x0=-0.83, y0=3.7, x1=0.83, y1=3.7, line=dict(color="black", width=2)),
+            dict(type="line", x0=-0.83, y0=1.3, x1=-0.83, y1=3.7, line=dict(color="black", width=2)),
+            dict(type="line", x0=0.83, y0=1.3, x1=0.83, y1=3.7, line=dict(color="black", width=2)),
+            dict(type="line", x0=-3, y0=0, x1=3, y1=0, line=dict(color="gray", width=1, dash="dash")),
+            dict(type="line", x0=0, y0=0, x1=0, y1=5, line=dict(color="gray", width=1, dash="dash")),
+        ]
+        fig_zone_interactive.update_layout(
+            title="Strike Zone Plot",
+            height=500,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend_title_text="Pitch Type",
+            shapes=zone_shapes,
+        )
+        fig_zone_interactive.update_xaxes(
+            title_text="PlateLocSide",
+            range=[-3, 3],
+            dtick=1,
+            showgrid=True,
+            gridcolor="lightgray",
+        )
+        fig_zone_interactive.update_yaxes(
+            title_text="PlateLocHeight",
+            range=[0, 5],
+            dtick=1,
+            showgrid=True,
+            gridcolor="lightgray",
+        )
+
     # ---------------------------
     # BREAK PLOT
     # ---------------------------
@@ -446,11 +525,86 @@ if folder_path.strip() != "":
     fig_break.tight_layout()
     fig_break.savefig(break_path, dpi=150)
 
+    if HAS_PLOTLY:
+        # Interactive break plot (web)
+        break_plot_df = break_df.copy()
+        if "PitchNo" in df_filtered.columns:
+            break_plot_df = break_plot_df.join(df_filtered[["PitchNo", "RelSpeed", "SpinRate"]])
+            break_plot_df["PitchNo"] = break_plot_df["PitchNo"].fillna("").astype(str)
+        else:
+            break_plot_df = break_plot_df.join(df_filtered[["RelSpeed", "SpinRate"]])
+            break_plot_df["PitchNo"] = ""
+        break_plot_df["RelSpeedDisplay"] = break_plot_df["RelSpeed"].apply(
+            lambda v: f"{v:.1f}" if pd.notna(v) else "N/A"
+        )
+        break_plot_df["SpinRateDisplay"] = break_plot_df["SpinRate"].apply(
+            lambda v: f"{v:.0f}" if pd.notna(v) else "N/A"
+        )
+
+        fig_break_interactive = go.Figure()
+        for pitch_type in pitch_types:
+            pitch_group = break_plot_df[break_plot_df["TaggedPitchType"] == pitch_type]
+            if pitch_group.empty:
+                continue
+            fig_break_interactive.add_trace(
+                go.Scatter(
+                    x=pitch_group["HorzBreak"],
+                    y=pitch_group["InducedVertBreak"],
+                    mode="markers",
+                    name=pitch_type,
+                    marker=dict(size=9, color=pitch_color_map.get(pitch_type, "#7f7f7f")),
+                    customdata=pitch_group[["PitchNo", "RelSpeedDisplay", "SpinRateDisplay"]],
+                    hovertemplate=(
+                        "Pitch Type: %{fullData.name}<br>"
+                        "Pitch No: %{customdata[0]}<br>"
+                        "RelSpeed: %{customdata[1]}<br>"
+                        "SpinRate: %{customdata[2]}<br>"
+                        "Horizontal Break: %{x:.2f}<br>"
+                        "Vertical Break: %{y:.2f}<extra></extra>"
+                    ),
+                )
+            )
+
+        break_shapes = [
+            dict(type="line", x0=-25, y0=0, x1=25, y1=0, line=dict(color="gray", width=1, dash="dash")),
+            dict(type="line", x0=0, y0=-25, x1=0, y1=25, line=dict(color="gray", width=1, dash="dash")),
+        ]
+        fig_break_interactive.update_layout(
+            title="Break Plot",
+            height=500,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend_title_text="Pitch Type",
+            shapes=break_shapes,
+        )
+        fig_break_interactive.update_xaxes(
+            title_text="Horizontal Break",
+            range=[-25, 25],
+            dtick=5,
+            showgrid=True,
+            gridcolor="lightgray",
+        )
+        fig_break_interactive.update_yaxes(
+            title_text="Vertical Break",
+            range=[-25, 25],
+            dtick=5,
+            showgrid=True,
+            gridcolor="lightgray",
+            scaleanchor="x",
+            scaleratio=1,
+        )
+
     left_col, right_col = st.columns(2)
-    with left_col:
-        st.pyplot(fig_zone, use_container_width=True)
-    with right_col:
-        st.pyplot(fig_break, use_container_width=True)
+    if HAS_PLOTLY:
+        with left_col:
+            st.plotly_chart(fig_zone_interactive, use_container_width=True)
+        with right_col:
+            st.plotly_chart(fig_break_interactive, use_container_width=True)
+    else:
+        st.warning("Plotly is not installed. Showing static charts. Install with: pip install plotly")
+        with left_col:
+            st.pyplot(fig_zone, use_container_width=True)
+        with right_col:
+            st.pyplot(fig_break, use_container_width=True)
 
     plt.close(fig_zone)
     plt.close(fig_break)
