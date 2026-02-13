@@ -174,6 +174,80 @@ def normalize_tilt_clock(value: object) -> str:
     return raw
 
 
+REQUIRED_COLS = [
+    "TaggedPitchType",
+    "PlateLocHeight",
+    "PlateLocSide",
+    "RelSpeed",
+    "SpinRate",
+    "Tilt",
+    "Extension",
+    "InducedVertBreak",
+    "HorzBreak",
+    "VertApprAngle",
+]
+
+NUMERIC_COLS = [
+    "PlateLocHeight",
+    "PlateLocSide",
+    "RelSpeed",
+    "SpinRate",
+    "Extension",
+    "InducedVertBreak",
+    "HorzBreak",
+    "VertApprAngle",
+]
+
+
+def prepare_pitch_dataframe(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = raw_df.copy()
+    df.columns = df.columns.str.strip()
+
+    missing_cols = [col for col in REQUIRED_COLS if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required column(s): {', '.join(missing_cols)}")
+
+    for col in NUMERIC_COLS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["Tilt"] = df["Tilt"].apply(normalize_tilt_clock)
+    df["TaggedPitchType"] = df["TaggedPitchType"].fillna("Unknown").astype(str).str.strip()
+
+    df["Call"] = "Ball"
+    df.loc[
+        (df["PlateLocHeight"] >= 1.3)
+        & (df["PlateLocHeight"] <= 3.7)
+        & (df["PlateLocSide"] >= -0.83)
+        & (df["PlateLocSide"] <= 0.83),
+        "Call",
+    ] = "Strike"
+    return df
+
+
+def build_summary(df_source: pd.DataFrame) -> pd.DataFrame:
+    summary = df_source.groupby("TaggedPitchType").agg(
+        Pitches=("TaggedPitchType", "count"),
+        Strikes=("Call", lambda x: (x == "Strike").sum()),
+        Balls=("Call", lambda x: (x == "Ball").sum()),
+        VeloAvg=("RelSpeed", "mean"),
+        VeloMin=("RelSpeed", "min"),
+        VeloMax=("RelSpeed", "max"),
+        SpinRate=("SpinRate", "mean"),
+        Tilt=("Tilt", mode_or_unknown),
+        Extension=("Extension", "mean"),
+        VertAvg=("InducedVertBreak", "mean"),
+        HozAvg=("HorzBreak", "mean"),
+        VAAAvg=("VertApprAngle", "mean"),
+    ).reset_index()
+
+    summary[
+        ["VeloAvg", "VeloMin", "VeloMax", "SpinRate", "Extension", "VertAvg", "HozAvg", "VAAAvg"]
+    ] = summary[
+        ["VeloAvg", "VeloMin", "VeloMax", "SpinRate", "Extension", "VertAvg", "HozAvg", "VAAAvg"]
+    ].round(1)
+    return summary
+
+
 folder_path = DEFAULT_CSV_FOLDER
 
 if folder_path.strip() != "":
@@ -238,53 +312,15 @@ if folder_path.strip() != "":
     st.info(f"Selected Player: {player_name} | Date: {report_date}")
 
     if source_mode == "local":
-        df = pd.read_csv(selected_row["Path"])
+        raw_df = pd.read_csv(selected_row["Path"])
     else:
-        df = pd.read_csv(io.BytesIO(selected_row["FileBytes"]))
-    df.columns = df.columns.str.strip()
+        raw_df = pd.read_csv(io.BytesIO(selected_row["FileBytes"]))
 
-    required_cols = [
-        "TaggedPitchType",
-        "PlateLocHeight",
-        "PlateLocSide",
-        "RelSpeed",
-        "SpinRate",
-        "Tilt",
-        "Extension",
-        "InducedVertBreak",
-        "HorzBreak",
-        "VertApprAngle",
-    ]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        st.error(f"Missing required column(s) in selected file: {', '.join(missing_cols)}")
+    try:
+        df = prepare_pitch_dataframe(raw_df)
+    except ValueError as exc:
+        st.error(f"{exc} in selected file.")
         st.stop()
-
-    for col in [
-        "PlateLocHeight",
-        "PlateLocSide",
-        "RelSpeed",
-        "SpinRate",
-        "Extension",
-        "InducedVertBreak",
-        "HorzBreak",
-        "VertApprAngle",
-    ]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df["Tilt"] = df["Tilt"].apply(normalize_tilt_clock)
-
-    # ---------------------------
-    # STRIKE ZONE LOGIC
-    # ---------------------------
-    df["Call"] = "Ball"
-    df.loc[
-        (df["PlateLocHeight"] >= 1.3)
-        & (df["PlateLocHeight"] <= 3.7)
-        & (df["PlateLocSide"] >= -0.83)
-        & (df["PlateLocSide"] <= 0.83),
-        "Call",
-    ] = "Strike"
 
     df["TaggedPitchType"] = df["TaggedPitchType"].fillna("Unknown").astype(str).str.strip()
     available_pitch_types = sorted(df["TaggedPitchType"].unique().tolist(), key=str.lower)
@@ -305,44 +341,156 @@ if folder_path.strip() != "":
     # ---------------------------
     # SUMMARY TABLE
     # ---------------------------
-    summary = df_filtered.groupby("TaggedPitchType").agg(
-        Pitches=("TaggedPitchType", "count"),
-        Strikes=("Call", lambda x: (x == "Strike").sum()),
-        Balls=("Call", lambda x: (x == "Ball").sum()),
-        VeloAvg=("RelSpeed", "mean"),
-        VeloMin=("RelSpeed", "min"),
-        VeloMax=("RelSpeed", "max"),
-        SpinRate=("SpinRate", "mean"),
-        Tilt=("Tilt", mode_or_unknown),
-        Extension=("Extension", "mean"),
-        VertAvg=("InducedVertBreak", "mean"),
-        HozAvg=("HorzBreak", "mean"),
-        VAAAvg=("VertApprAngle", "mean"),
-    ).reset_index()
-
-    summary[["VeloAvg", "VeloMin", "VeloMax", "SpinRate", "Extension", "VertAvg", "HozAvg", "VAAAvg"]] = summary[
-        ["VeloAvg", "VeloMin", "VeloMax", "SpinRate", "Extension", "VertAvg", "HozAvg", "VAAAvg"]
-    ].round(2)
+    summary = build_summary(df_filtered)
 
     # ---------------------------
     # DASHBOARD (RESPONSIVE)
     # ---------------------------
     st.subheader("Dashboard")
-    dashboard_df = summary.rename(
+    compare_button_key = "compare_all_metrics_prev"
+    if compare_button_key not in st.session_state:
+        st.session_state[compare_button_key] = False
+
+    if st.button("Compare with previous data", use_container_width=False):
+        st.session_state[compare_button_key] = not st.session_state[compare_button_key]
+
+    show_comparison = st.session_state[compare_button_key]
+    if show_comparison:
+        st.caption("Comparison mode: ON")
+    else:
+        st.caption("Comparison mode: OFF")
+
+    summary_view = summary.copy()
+    comparison_ready = False
+    comparison_columns = [
+        "VeloAvg",
+        "VeloMin",
+        "VeloMax",
+        "SpinRate",
+        "Extension",
+        "VertAvg",
+        "HozAvg",
+        "VAAAvg",
+    ]
+    comparison_tolerance = {
+        "VeloAvg": 0.1,
+        "VeloMin": 0.1,
+        "VeloMax": 0.1,
+        "SpinRate": 0.1,
+        "Extension": 0.1,
+        "VertAvg": 0.1,
+        "HozAvg": 0.1,
+        "VAAAvg": 0.1,
+    }
+
+    if show_comparison:
+        player_history = metadata_df[metadata_df["PlayerName"] == player_name].copy()
+        if source_mode == "local":
+            player_history = player_history[player_history["Path"] != selected_row["Path"]]
+        else:
+            player_history = player_history[player_history.index != selected_row.name]
+
+        selected_date_sort = selected_row["DateSort"] if "DateSort" in selected_row else pd.NaT
+        if pd.notna(selected_date_sort):
+            previous_by_date = player_history[
+                player_history["DateSort"].notna() & (player_history["DateSort"] < selected_date_sort)
+            ]
+            if not previous_by_date.empty:
+                player_history = previous_by_date
+
+        previous_frames = []
+        for _, history_row in player_history.iterrows():
+            try:
+                if source_mode == "local":
+                    previous_raw = pd.read_csv(history_row["Path"])
+                else:
+                    previous_raw = pd.read_csv(io.BytesIO(history_row["FileBytes"]))
+                previous_df = prepare_pitch_dataframe(previous_raw)
+                if selected_pitch_filter != "All Pitches":
+                    previous_df = previous_df[previous_df["TaggedPitchType"] == selected_pitch_filter]
+                if not previous_df.empty:
+                    previous_frames.append(previous_df)
+            except Exception:
+                continue
+
+        if previous_frames:
+            previous_all = pd.concat(previous_frames, ignore_index=True)
+            previous_summary = build_summary(previous_all)[["TaggedPitchType"] + comparison_columns].rename(
+                columns={col: f"{col}_Prev" for col in comparison_columns}
+            )
+            summary_view = summary_view.merge(previous_summary, on="TaggedPitchType", how="left")
+            comparison_ready = summary_view[[f"{col}_Prev" for col in comparison_columns]].notna().any().any()
+        else:
+            st.info("No previous data found for comparison.")
+
+    display_columns = {
+        "Pitches": "Pitches",
+        "Strikes": "Strikes",
+        "Balls": "Balls",
+        "VeloAvg": "Velo Avg (RelSpeed)",
+        "VeloMin": "Velo Min (RelSpeed)",
+        "VeloMax": "Velo Max (RelSpeed)",
+        "SpinRate": "SpinRate",
+        "Tilt": "Tilt",
+        "Extension": "Extension",
+        "VertAvg": "Vert. (InducedVertBreak)",
+        "HozAvg": "Hoz (HorzBreak)",
+        "VAAAvg": "VAA (VertApprAngle)",
+    }
+    dashboard_df = summary_view[list(display_columns.keys()) + ["TaggedPitchType"]].rename(
         columns={
             "TaggedPitchType": "Pitch",
-            "VeloAvg": "Velo Avg (RelSpeed)",
-            "VeloMin": "Velo Min (RelSpeed)",
-            "VeloMax": "Velo Max (RelSpeed)",
-            "SpinRate": "SpinRate",
-            "Tilt": "Tilt",
-            "Extension": "Extension",
-            "VertAvg": "Vert. (InducedVertBreak)",
-            "HozAvg": "Hoz (HorzBreak)",
-            "VAAAvg": "VAA (VertApprAngle)",
+            **display_columns,
         }
     )
-    st.dataframe(dashboard_df, use_container_width=True, hide_index=True)
+    dashboard_df = dashboard_df[
+        [
+            "Pitch",
+            "Pitches",
+            "Balls",
+            "Strikes",
+            "Velo Avg (RelSpeed)",
+            "Velo Min (RelSpeed)",
+            "Velo Max (RelSpeed)",
+            "SpinRate",
+            "Tilt",
+            "Extension",
+            "Vert. (InducedVertBreak)",
+            "Hoz (HorzBreak)",
+            "VAA (VertApprAngle)",
+        ]
+    ]
+    dashboard_float_cols = dashboard_df.select_dtypes(include=["float32", "float64"]).columns
+    if len(dashboard_float_cols) > 0:
+        dashboard_df[dashboard_float_cols] = dashboard_df[dashboard_float_cols].round(1)
+
+    if show_comparison and comparison_ready:
+        style_df = pd.DataFrame("", index=dashboard_df.index, columns=dashboard_df.columns)
+        for idx in summary_view.index:
+            for source_col in comparison_columns:
+                prev_col = f"{source_col}_Prev"
+                if prev_col not in summary_view.columns:
+                    continue
+                current_value = summary_view.at[idx, source_col]
+                previous_value = summary_view.at[idx, prev_col]
+                if pd.isna(current_value) or pd.isna(previous_value):
+                    continue
+                tolerance = comparison_tolerance.get(source_col, 0.1)
+                display_col = display_columns[source_col]
+                if current_value > previous_value + tolerance:
+                    style_df.at[idx, display_col] = "background-color: #f4c7c3; color: #000000; font-weight: 700;"
+                elif current_value < previous_value - tolerance:
+                    style_df.at[idx, display_col] = "background-color: #cfe2f3; color: #000000; font-weight: 700;"
+
+        styled_format = {col: "{:.1f}" for col in dashboard_float_cols}
+        styled_dashboard = dashboard_df.style.apply(lambda _: style_df, axis=None).format(styled_format)
+        st.dataframe(styled_dashboard, use_container_width=True, hide_index=True)
+        st.caption(
+            "Comparison applied to pitch metrics only (not Pitches/Balls/Strikes). "
+            "Higher than previous = red cell, lower than previous = blue cell, similar = normal."
+        )
+    else:
+        st.dataframe(dashboard_df, use_container_width=True, hide_index=True)
 
     pitch_type_series = df["TaggedPitchType"].fillna("Unknown").astype(str).str.strip()
     pitch_types_all = sorted(pitch_type_series.unique().tolist(), key=str.lower)
@@ -716,8 +864,12 @@ if folder_path.strip() != "":
         f"Showing {len(pitch_log_df)} pitches for filter: "
         f"{selected_pitch_filter if selected_pitch_filter else 'All Pitches'}"
     )
+    pitch_table_df = pitch_log_df.drop(columns=["PitchSelectId"]).copy()
+    float_cols = pitch_table_df.select_dtypes(include=["float32", "float64"]).columns
+    if len(float_cols) > 0:
+        pitch_table_df[float_cols] = pitch_table_df[float_cols].round(1)
     st.dataframe(
-        pitch_log_df.drop(columns=["PitchSelectId"]),
+        pitch_table_df,
         use_container_width=True,
         hide_index=True,
     )
